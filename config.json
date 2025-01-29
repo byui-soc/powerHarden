@@ -1,14 +1,31 @@
 {
-    "UnauthorizedPrograms": [
-      "Google Chrome",
-      "Mozilla Firefox",
-      "Slack"
-    ],
-    "UACSettings": {
-      "EnableLUA": 1,
-      "ConsentPromptBehaviorAdmin": 5,
-      "ConsentPromptBehaviorUser": 3,
-      "PromptOnSecureDesktop": 1
+  "BlacklistedPrograms": [
+    "Steam",
+    "Discord",
+    "Cheat Engine",
+    "Aimware",
+    "EZfrags",
+    "Fortnite",
+    "PUBG",
+    "Epic Games",
+    "BlueStacks",
+    "Nox Player",
+    "League of Legends"
+  ],
+  "UACSettings": {
+    "EnableLUA": 1,
+    "ConsentPromptBehaviorAdmin": 5,
+    "ConsentPromptBehaviorUser": 3,
+    "PromptOnSecureDesktop": 1
+  },
+  "FirewallRules": [ 
+    {
+      "Name": "DisableInboundSMBv1",
+      "Protocol": "TCP",
+      "Port": 445,
+      "Action": "Block",
+      "Direction": "Inbound"
     }
-  }
-  
+  ],
+  "ApplySecurityUpdates": true
+}

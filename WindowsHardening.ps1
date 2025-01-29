@@ -1,20 +1,26 @@
 <#
 .SYNOPSIS
-    Windows Hardening Script using a JSON config file.
+    Windows Hardening Script (Blacklist-based) with optional security updates.
 
 .DESCRIPTION
-    This script reads from a JSON configuration file that contains:
-    1) A list of unauthorized programs to remove.
-    2) Desired UAC settings to configure in the registry.
+    - Reads a JSON config file containing:
+      1) A blacklist of unauthorized programs to remove.
+      2) UAC settings.
+      3) Optional firewall rule definitions.
+      4) Whether or not to apply security updates.
+    - Uninstalls blacklisted programs found on the system.
+    - Applies UAC settings to the registry.
+    - Configures optional firewall rules.
+    - Installs Windows security updates if specified.
 
 .NOTES
-    Author:  Your Name
-    Created: 2025-01-29
-    Version: 1.0
+    Author:        Example Author
+    Created:       2025-01-29
+    Version:       1.0
 
     DISCLAIMER:
-    Always test thoroughly in a lab or staging environment. Improper changes can break system functionality. 
-    Adjust the methods of removing software or enumerating installed applications as necessary.
+    - Always test thoroughly in a lab or staging environment.
+    - Removing programs, changing registry settings, or installing updates can impact system stability.
 #>
 
 param(
@@ -22,88 +28,169 @@ param(
     [string]$ConfigPath
 )
 
-# -------------------------
-# 1. Import JSON Config
-# -------------------------
-try {
-    if (-not (Test-Path $ConfigPath)) {
-        Write-Error "Config file not found at path: $ConfigPath. Exiting."
-        return
-    }
-
-    $Config = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-    Write-Host "Successfully loaded configuration from $ConfigPath."
-} catch {
-    Write-Error "Failed to read or parse JSON config file: $_. Exception: $($_.Exception.Message)"
+# ---------------------------------------------------
+# 1. Validate and Load Configuration
+# ---------------------------------------------------
+if (-not (Test-Path $ConfigPath)) {
+    Write-Error "Config file not found at $ConfigPath. Script will exit."
     return
 }
 
-# -------------------------
-# 2. Remove Unauthorized Programs
-# -------------------------
-$unauthorizedPrograms = $Config.UnauthorizedPrograms
-if ($unauthorizedPrograms -and $unauthorizedPrograms.Count -gt 0) {
-    Write-Host "`n--- Checking for unauthorized programs ---"
+try {
+    $ConfigRaw = Get-Content -Path $ConfigPath -Raw
+    $Config = $ConfigRaw | ConvertFrom-Json
+    Write-Host "`n[INFO] Configuration loaded from $ConfigPath."
+} catch {
+    Write-Error "Failed to read or parse JSON config: $($_.Exception.Message)"
+    return
+}
 
-    # This method uses Win32_Product, which can be slow and occasionally incomplete.
-    # Consider enumerating from registry or other sources if needed.
+# ---------------------------------------------------
+# 2. Remove Blacklisted Programs
+# ---------------------------------------------------
+if ($Config.BlacklistedPrograms -and $Config.BlacklistedPrograms.Count -gt 0) {
+    Write-Host "`n[INFO] Checking for blacklisted programs..."
+
+    # Potentially slow approach; use with caution
     $installedApps = Get-WmiObject -Class Win32_Product
 
-    foreach ($blockedApp in $unauthorizedPrograms) {
-        # Search by Name. Adjust property or match logic if needed.
-        $foundApp = $installedApps | Where-Object { $_.Name -like "*$blockedApp*" }
-        if ($foundApp) {
-            Write-Host "Found unauthorized program: $($foundApp.Name). Attempting to remove..."
+    foreach ($blacklisted in $Config.BlacklistedPrograms) {
+        # We use a wildcard match for partial matches, e.g. "Steam" => "Steam Client"
+        $foundApps = $installedApps | Where-Object { $_.Name -like "*$blacklisted*" }
 
+        foreach ($app in $foundApps) {
+            Write-Host "[WARNING] Found blacklisted app: $($app.Name). Attempting to remove..."
             try {
-                $uninstallResult = $foundApp.Uninstall()
-                if ($uninstallResult.ReturnValue -eq 0) {
-                    Write-Host "Successfully removed: $($foundApp.Name)"
+                $result = $app.Uninstall()
+                if ($result.ReturnValue -eq 0) {
+                    Write-Host "[INFO] Successfully removed: $($app.Name)."
                 } else {
-                    Write-Warning "Failed to remove: $($foundApp.Name). Return code: $($uninstallResult.ReturnValue)"
+                    Write-Warning "[WARN] Failed to remove $($app.Name). Return code: $($result.ReturnValue)"
                 }
             } catch {
-                Write-Warning "Error uninstalling $($foundApp.Name): $($_.Exception.Message)"
+                Write-Warning "[ERROR] Exception while uninstalling $($app.Name): $($_.Exception.Message)"
             }
         }
-        else {
-            Write-Host "Unauthorized program '$blockedApp' not found on this system."
-        }
     }
 } else {
-    Write-Host "No unauthorized programs listed in config."
+    Write-Host "[INFO] No blacklisted programs specified."
 }
 
-# -------------------------
-# 3. Enumerate & Change UAC Rules
-# -------------------------
-# UAC Registry path
+# ---------------------------------------------------
+# 3. Apply UAC Settings
+# ---------------------------------------------------
 $uacRegistryPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System"
-
-Write-Host "`n--- Applying UAC settings ---"
 if ($Config.UACSettings) {
-    $UACSettings = $Config.UACSettings | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
-
-    foreach ($setting in $UACSettings) {
-        $value = $Config.UACSettings.$setting
-        $currentValue = (Get-ItemProperty -Path $uacRegistryPath -Name $setting -ErrorAction SilentlyContinue).$setting
-
-        if ($null -eq $currentValue) {
-            # If the value doesn't exist, it will be created
-            Write-Host "Setting $setting does not exist. Creating and setting it to: $value"
-        } else {
-            Write-Host "Current $setting is '$currentValue'. Changing to '$value'..."
-        }
+    Write-Host "`n[INFO] Applying UAC settings..."
+    foreach ($key in $Config.UACSettings.PSObject.Properties) {
+        $settingName = $key.Name
+        $desiredValue = $key.Value
 
         try {
-            Set-ItemProperty -Path $uacRegistryPath -Name $setting -Value $value -Force
-            Write-Host "Successfully set $setting to $value."
+            $currentValue = (Get-ItemProperty -Path $uacRegistryPath -Name $settingName -ErrorAction SilentlyContinue).$settingName
+            if ($null -eq $currentValue) {
+                Write-Host " - Creating $settingName with value $desiredValue."
+            } else {
+                Write-Host " - Current $settingName = $currentValue; changing to $desiredValue."
+            }
+
+            Set-ItemProperty -Path $uacRegistryPath -Name $settingName -Value $desiredValue -Force
+            Write-Host "   -> Successfully set $settingName to $desiredValue."
         } catch {
-            Write-Warning "Could not set $setting to $value. Error: $($_.Exception.Message)"
+            Write-Warning "[WARNING] Failed to set $settingName: $($_.Exception.Message)"
         }
     }
 } else {
-    Write-Host "No UAC settings found in config to apply."
+    Write-Host "[INFO] No UAC settings found in config."
 }
 
-Write-Host "`n--- Windows Hardening Script Completed ---"
+# ---------------------------------------------------
+# 4. Optional Firewall Rule Configuration
+# ---------------------------------------------------
+if ($Config.FirewallRules -and $Config.FirewallRules.Count -gt 0) {
+    Write-Host "`n[INFO] Applying firewall rules..."
+    foreach ($rule in $Config.FirewallRules) {
+        # Each rule is an object with Name, Protocol, Port, Action, Direction, etc.
+        # Example: { "Name": "DisableInboundSMBv1", "Protocol": "TCP", "Port": 445, "Action": "Block", "Direction": "Inbound" }
+
+        $Name      = $rule.Name
+        $Protocol  = $rule.Protocol
+        $Port      = $rule.Port
+        $Action    = $rule.Action
+        $Direction = $rule.Direction
+
+        Write-Host " - Creating/Updating firewall rule '$Name' for port $Port ($Protocol)."
+        try {
+            # If rule already exists, update it. Otherwise, create it.
+            # You can refine this logic to handle existing rules more gracefully.
+            $existingRule = Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
+            if ($null -ne $existingRule) {
+                # Update existing rule
+                Set-NetFirewallRule -DisplayName $Name -Action $Action -Direction $Direction -Protocol $Protocol -LocalPort $Port
+                Write-Host "   -> Updated existing rule: $Name"
+            } else {
+                # Create new rule
+                New-NetFirewallRule -DisplayName $Name -Action $Action -Direction $Direction -Protocol $Protocol -LocalPort $Port
+                Write-Host "   -> Created new rule: $Name"
+            }
+        } catch {
+            Write-Warning "[WARNING] Failed to process firewall rule '$Name': $($_.Exception.Message)"
+        }
+    }
+} else {
+    Write-Host "[INFO] No firewall rules to apply."
+}
+
+# ---------------------------------------------------
+# 5. (Optional) Install Security Updates
+# ---------------------------------------------------
+if ($Config.ApplySecurityUpdates -eq $true) {
+    Write-Host "`n[INFO] Applying Windows security updates..."
+    
+    # Approach A: Use built-in UsoClient (Windows 10+)
+    # This approach triggers an update scan, then download, then install. 
+    # It does NOT provide interactive progress in the console. 
+    # On some Windows versions, UsoClient might not be fully supported. 
+    # 
+    # By design:
+    #   UsoClient StartScan       -> Checks for updates
+    #   UsoClient StartDownload   -> Downloads updates
+    #   UsoClient StartInstall    -> Installs downloaded updates
+    #   UsoClient ScanInstallWait -> Combined approach that scans and installs
+    
+    try {
+        Write-Host " -> Starting update scan..."
+        Start-Process -FilePath "usoclient.exe" -ArgumentList "StartScan" -NoNewWindow -Wait
+        Write-Host " -> Downloading updates..."
+        Start-Process -FilePath "usoclient.exe" -ArgumentList "StartDownload" -NoNewWindow -Wait
+        Write-Host " -> Installing updates..."
+        Start-Process -FilePath "usoclient.exe" -ArgumentList "StartInstall" -NoNewWindow -Wait
+
+        Write-Host "Updates have been initiated. The process may continue in the background."
+        Write-Host "Some updates may require a reboot. Manual or scheduled reboot may be needed."
+    } catch {
+        Write-Warning "[WARNING] UsoClient commands might not be supported on all Windows versions. Error: $($_.Exception.Message)"
+    }
+
+    # Approach B (Optional): Use PSWindowsUpdate module
+    # This requires the 'PSWindowsUpdate' module, which may not be installed by default on older systems.
+    # Uncomment below if you prefer PSWindowsUpdate, and comment out UsoClient lines above.
+    #
+    # try {
+    #     if (-not (Get-Module -Name PSWindowsUpdate -ListAvailable)) {
+    #         Write-Host " -> PSWindowsUpdate module not found, installing from PSGallery..."
+    #         Install-Module PSWindowsUpdate -Force -Scope CurrentUser
+    #     }
+    #     Import-Module PSWindowsUpdate -Force
+    #
+    #     Write-Host " -> Checking and installing all available updates..."
+    #     Install-WindowsUpdate -AcceptAll -AutoReboot -IgnoreReboot
+    # } catch {
+    #     Write-Warning "[WARNING] Could not install or load PSWindowsUpdate: $($_.Exception.Message)"
+    # }
+
+} else {
+    Write-Host "[INFO] Skipping security updates as per config."
+}
+
+Write-Host "`n[INFO] Windows Hardening Script Completed Successfully."
