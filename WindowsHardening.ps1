@@ -103,7 +103,68 @@ if ($Config.UACSettings) {
 } else {
     Write-Host "[INFO] No UAC settings found in config."
 }
+# ---------------------------------------------------
+# 3.5 Check Autorun Entries
+# ---------------------------------------------------
+Write-Host "`n[INFO] Checking for unauthorized autorun entries..."
 
+# Common autorun registry locations
+$autorunRegistryPaths = @(
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run",
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+)
+
+# Startup folder paths
+$startupFolders = @(
+    "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"
+)
+
+# Check registry autoruns
+foreach ($path in $autorunRegistryPaths) {
+    if (Test-Path $path) {
+        $autorunEntries = Get-ItemProperty -Path $path
+        foreach ($entry in $autorunEntries.PSObject.Properties) {
+            if ($entry.Name -ne "PSPath" -and $entry.Name -ne "PSParentPath" -and $entry.Name -ne "PSChildName" -and $entry.Name -ne "PSDrive" -and $entry.Name -ne "PSProvider") {
+                $exePath = $entry.Value
+                foreach ($blacklisted in $Config.BlacklistedPrograms) {
+                    if ($exePath -like "*$blacklisted*") {
+                        Write-Host "[WARNING] Found blacklisted autorun entry: $entry.Name -> $exePath. Removing..."
+                        try {
+                            Remove-ItemProperty -Path $path -Name $entry.Name -Force
+                            Write-Host "[INFO] Removed autorun entry: $entry.Name."
+                        } catch {
+                            Write-Warning "[ERROR] Failed to remove autorun entry $entry.Name: $($_.Exception.Message)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Check Startup folders
+foreach ($folder in $startupFolders) {
+    if (Test-Path $folder) {
+        $startupFiles = Get-ChildItem -Path $folder -Filter "*.lnk"
+        foreach ($file in $startupFiles) {
+            foreach ($blacklisted in $Config.BlacklistedPrograms) {
+                if ($file.Name -like "*$blacklisted*") {
+                    Write-Host "[WARNING] Found blacklisted startup shortcut: $file. Removing..."
+                    try {
+                        Remove-Item -Path $file.FullName -Force
+                        Write-Host "[INFO] Removed startup shortcut: $file."
+                    } catch {
+                        Write-Warning "[ERROR] Failed to remove startup shortcut $file: $($_.Exception.Message)"
+                    }
+                }
+            }
+        }
+    }
+}
+
+Write-Host "[INFO] Autorun entry check completed."
 # ---------------------------------------------------
 # 4. Optional Firewall Rule Configuration
 # ---------------------------------------------------
