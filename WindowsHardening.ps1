@@ -89,15 +89,16 @@ if ($Config.UACSettings) {
         try {
             $currentValue = (Get-ItemProperty -Path $uacRegistryPath -Name $settingName -ErrorAction SilentlyContinue).$settingName
             if ($null -eq $currentValue) {
-                Write-Host " - Creating $settingName with value $desiredValue."
+                Write-Host " - Creating ${settingName} with value $desiredValue."
             } else {
-                Write-Host " - Current $settingName = $currentValue; changing to $desiredValue."
+                Write-Host " - Current ${settingName} = $currentValue; changing to $desiredValue."
             }
 
             Set-ItemProperty -Path $uacRegistryPath -Name $settingName -Value $desiredValue -Force
-            Write-Host "   -> Successfully set $settingName to $desiredValue."
+            Write-Host "   -> Successfully set ${settingName} to $desiredValue."
         } catch {
-            Write-Warning "[WARNING] Failed to set $settingName: $($_.Exception.Message)"
+            Write-Warning "[WARNING] Failed to set ${settingName}: $($_.Exception.Message)"
+
         }
     }
 } else {
